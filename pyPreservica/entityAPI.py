@@ -2382,3 +2382,92 @@ class EntityAPI(AuthenticatedAPI):
                                   "_delete_entity", request.content.decode('utf-8'))
         logger.error(exception)
         raise exception
+    
+    
+    def get_deletions(self, maximum: int = 250, next_page: str = None) -> PagedSet:
+
+        self.token = self.__token__()
+        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}
+        params = {'start': str(0), 'max': str(maximum)}
+        
+        if next_page is None:
+            params = {'start': '0', 'max': str(maximum)}
+            request = self.session.get(f'{self.protocol}://{self.server}/api/entity/actions/deletions', params=params, headers=headers)
+        else:
+            request = self.session.get(next_page,params=params)
+        if request.status_code == requests.codes.ok:
+            xml_response = str(request.content.decode('utf-8'))
+            entity_response = xml.etree.ElementTree.fromstring(xml_response)
+            logger.debug(xml_response)
+            result = set()
+            next_url = entity_response.find(f'.//{{{self.entity_ns}}}Paging/{{{self.entity_ns}}}Next')
+            total_results = int(entity_response.find(
+                f'.//{{{self.entity_ns}}}TotalResults').text)
+            for deletion in entity_response.findall(f'.//{{{self.entity_ns}}}DeletionAction'):
+                progress_token = deletion.find(f'.//{{{self.entity_ns}}}ProgressToken').text
+                ref = deletion.find(f'.//{{{self.entity_ns}}}Entity').get('ref')
+                delete_status = deletion.find(f'.//{{{self.entity_ns}}}Entity').get('deleted')
+                user = deletion.find(f'.//{{{self.entity_ns}}}User').text
+                comment = deletion.find(f'.//{{{self.entity_ns}}}Comment').text
+                result.add(Deletion(progress_token,delete_status,ref,user,comment))
+            has_more = True
+            url = None
+            if next_url is None:
+                has_more = False
+            else:
+                url = next_url.text
+            return PagedSet(result,has_more,total_results,url)
+        elif request.status_code == requests.codes.unauthorized:
+            self.token = self.__token__()
+            return self.get_deletions()
+        else:
+            raise RuntimeError(request.status_code, "get_deletions failed")
+
+    def approve_all_existing_deletions(self, supervisor_comment: str, maximum=250):
+        deletion_pagedset = self.get_deletions(maximum = maximum, next_page = None)
+        config = configparser.ConfigParser()
+        config.read('credentials.properties', encoding='utf-8')
+        try:
+            manager_username = config['credentials']['manager.username']
+            manager_password = config['credentials']['manager.password']
+            self.manager_token(manager_username, manager_password)
+        except KeyError:
+            raise RuntimeError("No manager password set in credentials.properties")
+        for deletion in deletion_pagedset.get_results():
+            try:
+                self._approve_deletion(progress=deletion.progress_token,manager_username=manager_username,manager_password=manager_password,supervisor_comment=supervisor_comment)
+                print(f'approved deletion: {deletion.entity_reference}')
+            except Exception as e:
+                print(f'deletion failed for {deletion.entity_reference}')
+                print(e)
+
+    def _approve_deletion(self, progress: str, manager_username: str, manager_password: str, supervisor_comment: str):
+        self.token = self.__token__()
+        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}        
+        req = self.session.get(f"{self.protocol}://{self.server}/api/entity/progress/{progress}", headers=headers)
+        while True:                     
+            if req.status_code == requests.codes.ok:
+                entity_response = xml.etree.ElementTree.fromstring(req.content.decode("utf-8"))
+                status = entity_response.find(".//{http://status.preservica.com}Status")
+                if hasattr(status, 'text'):
+                    if status.text == "PENDING":
+                        headers = {HEADER_TOKEN: self.manager_token(manager_username, manager_password),
+                                    'Content-Type': 'application/xml;charset=UTF-8'}
+                        xml_object = xml.etree.ElementTree.Element('DeletionAction ', {"xmlns:xip": self.xip_ns,
+                                                                                        "xmlns": self.entity_ns})
+                        approval_el = xml.etree.ElementTree.SubElement(xml_object, "Approval")
+                        xml.etree.ElementTree.SubElement(approval_el, "Approved").text = "true"
+                        xml.etree.ElementTree.SubElement(approval_el, "Comment").text = supervisor_comment
+                        xml_request = xml.etree.ElementTree.tostring(xml_object, encoding='utf-8')
+                        logger.debug(xml_request)
+                        approve = self.session.put(
+                            f"{self.protocol}://{self.server}/api/entity/actions/deletions/{progress}",
+                            data=xml_request, headers=headers)
+                        if approve.status_code == requests.codes.accepted:
+                            return progress
+                        else:
+                            logger.error(approve.content.decode('utf-8'))
+                            raise RuntimeError(approve.status_code, "approve_deletion failed during approval")
+                    sleep(2.0)
+            req = self.session.get(f"{self.protocol}://{self.server}/api/entity/progress/{progress}",
+                                    headers=headers)
