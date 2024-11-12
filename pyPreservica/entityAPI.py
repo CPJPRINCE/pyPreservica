@@ -2385,7 +2385,12 @@ class EntityAPI(AuthenticatedAPI):
     
     
     def get_deletions(self, maximum: int = 250, next_page: str = None) -> PagedSet:
+        """
+        Retrieves all deletions awaiting approval as a PagedSet
 
+        :param maximum: Set the maximum to retrieve (limit at 1000)
+        :param next_page: next page
+        """
         self.token = self.__token__()
         headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}
         params = {'start': str(0), 'max': str(maximum)}
@@ -2423,10 +2428,17 @@ class EntityAPI(AuthenticatedAPI):
         else:
             raise RuntimeError(request.status_code, "get_deletions failed")
 
-    def approve_all_existing_deletions(self, supervisor_comment: str, maximum=250):
+    def approve_all_existing_deletions(self, supervisor_comment: str, maximum=250, credentials_path: str = 'credentials.propertes'):
+        """
+        Approves all existing deletions
+
+        :param supervisor_comment:   Set a Supervisor comment.
+        :param maximum:              Set the maximum number of deletions to retrieve (limit of 1000)
+        :param credentials_path:    Specify a credentials.properties file to use.    
+        """
         deletion_pagedset = self.get_deletions(maximum = maximum, next_page = None)
         config = configparser.ConfigParser()
-        config.read('credentials.properties', encoding='utf-8')
+        config.read(credentials_path, encoding='utf-8')
         try:
             manager_username = config['credentials']['manager.username']
             manager_password = config['credentials']['manager.password']
@@ -2442,6 +2454,15 @@ class EntityAPI(AuthenticatedAPI):
                 print(e)
 
     def _approve_deletion(self, progress: str, manager_username: str, manager_password: str, supervisor_comment: str):
+        """
+        Approves a deletion
+        
+        :param progress:              progress token
+        :param manager_username:      username for manager
+        :param manager_password:      password for manager
+        :param supervisor_comment:  supervisor comment 
+        """
+        
         self.token = self.__token__()
         headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}        
         req = self.session.get(f"{self.protocol}://{self.server}/api/entity/progress/{progress}", headers=headers)
