@@ -524,6 +524,21 @@ class ContentObject(Entity):
         self.path = CO_PATH
         self.tag = "ContentObject"
 
+class Deletion:
+    def __init__(self, progress_token: str, delete_status: str, entity_reference: str, user: str, comment: str):
+        self.entity_reference = entity_reference
+        self.user = user
+        self.comment = comment
+        self.delete_status = bool(delete_status)
+        self.progress_token = progress_token
+        
+    def __str__(self):
+        return f"Progress Token:\t\t\t{self.progress_token}\n" \
+               f"Delete Status:\t\t\t{self.delete_status}\n" \
+               f"Entity Reference:\t\t\t{self.entity_reference}\n" \
+               
+    def __repr__(self):
+        return self.__str__()
 
 class Representation:
     """
