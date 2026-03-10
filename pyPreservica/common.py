@@ -28,8 +28,9 @@ from urllib3.util import Retry
 import requests
 from requests.adapters import HTTPAdapter
 from typing import TypeVar
-import datetime
-import dateutil
+from datetime import datetime
+from dateutil.parser import parse
+import dateutil.tz
 
 import pyPreservica
 
@@ -80,7 +81,7 @@ class FileHash:
         return hash_algorithm.hexdigest()
 
 
-def identifiersToDict(identifiers: set) -> dict:
+def identifiers_to_dict(identifiers: set) -> dict:
     """
         Convert a set of tuples to a dict
         :param identifiers:
@@ -615,7 +616,7 @@ def sanitize(filename) -> str:
     Return a fairly safe version of the filename.
 
     We don't limit ourselves to ascii, because we want to keep municipality
-    names, etc, but we do want to get rid of anything potentially harmful,
+    names, etc., but we do want to get rid of anything potentially harmful,
     and make sure we do not exceed Windows filename length limits.
     Hence, a less safe blacklist, rather than a whitelist.
     """
@@ -680,10 +681,13 @@ class AuthenticatedAPI:
             Get a list of roles for the user
             :return list of roles:
         """
-        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}
+        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/json'}
         request = self.session.get(f"{self.protocol}://{self.server}/api/user/details", headers=headers)
+        logger.debug(request.headers)
         if request.status_code == requests.codes.ok:
-            roles: list[str] = json.loads(str(request.content.decode('utf-8')))['roles']
+            json_document = str(request.content.decode('utf-8'))
+            logger.debug(json_document)
+            roles: list[str] = json.loads(json_document)['roles']
             return roles
         elif request.status_code == requests.codes.unauthorized:
             self.token = self.__token__()
@@ -805,6 +809,7 @@ class AuthenticatedAPI:
                 self.sec_ns = f"{NS_SEC_ROOT}/v{self.major_version}.{self.minor_version}"
                 self.admin_ns = f"{NS_ADMIN}/v{self.major_version}.{self.minor_version}"
 
+        xml.etree.ElementTree.register_namespace("xip", f"{self.xip_ns}")
 
     def __version_number__(self):
         """
@@ -821,9 +826,6 @@ class AuthenticatedAPI:
             self.minor_version = int(version_numbers[1])
             self.patch_version = int(version_numbers[2])
 
-            if self.server == "preview.preservica.com":
-                self.minor_version = 1
-
             return version
         elif request.status_code == requests.codes.unauthorized:
             self.token = self.__token__()
@@ -832,6 +834,9 @@ class AuthenticatedAPI:
             logger.error(f"version number failed with http response {request.status_code}")
             logger.error(str(request.content))
             RuntimeError(request.status_code, "version number failed")
+            return None
+
+
 
     def __str__(self):
         return f"pyPreservica version: {pyPreservica.__version__}  (Preservica 8.0 Compatible) " \
@@ -862,6 +867,7 @@ class AuthenticatedAPI:
             logger.error(response.status_code)
             logger.error(str(response.content))
             RuntimeError(response.status_code, "Could not generate valid manager approval token")
+            return ""
 
     def __token__(self) -> str:
         """
@@ -891,9 +897,11 @@ class AuthenticatedAPI:
                             data = {'username': self.username,
                                     'continuationToken': response.json()['continuationToken'],
                                     'tenant': self.tenant, 'twoFactorToken': totp.now()}
+
+                            header = {'Content-Type': 'application/x-www-form-urlencoded'}
                             response_2fa = self.session.post(
                                 f'{self.protocol}://{self.server}/api/accesstoken/complete-2fa',
-                                data=data)
+                                data=data, headers=header)
                             if response_2fa.status_code == requests.codes.ok:
                                 return response_2fa.json()['token']
                             else:
@@ -930,6 +938,7 @@ class AuthenticatedAPI:
                 msg = "Failed to create a shared secret authentication token. Check your credentials are correct"
                 logger.error(msg)
                 raise RuntimeError(response.status_code, msg)
+        return ""
 
     def __init__(self, username: str = None, password: str = None, tenant: str = None, server: str = None,
                  use_shared_secret: bool = False, two_fa_secret_key: str = None,
@@ -1032,12 +1041,14 @@ class AuthenticatedAPI:
 
 def parse_date_to_iso(date):
     try:
-        date = datetime.datetime.fromisoformat(date.replace('Z','+0000'))
+        date = datetime.fromisoformat(date.replace('Z','+0000'))
         if date.tzinfo is None or date.tzinfo.utcoffset(date) is None:
-            date = date.replace(tzinfo=datetime.timezone.utc)
+            date = date.replace(tzinfo=dateutil.tz.UTC)
         date = date.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        return date
     except ValueError:
-        date = dateutil.parser.parse(date)
+        date = parse(date)
         if date.tzinfo is None or date.tzinfo.utcoffset(date) is None:
-            date = date.replace(tzinfo=datetime.timezone.utc)
+            date = date.replace(tzinfo=dateutil.tz.UTC)
         date = date.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        return date

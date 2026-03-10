@@ -55,7 +55,7 @@ or
 
 
 
-indexed-fields
+Indexed Fields
 ^^^^^^^^^^^^^^^^^
 
 Get a list of all the indexed metadata fields within the Preservica search engine. This includes the default
@@ -66,6 +66,39 @@ xip.* fields and any custom indexes which have been created through custom index
     client = ContentAPI()
 
     client.indexed_fields():
+
+
+Full Text Index
+^^^^^^^^^^^^^^^^^
+If a document contains text such as a PDF or a Word document or it has been `OCR'd <https://en.wikipedia.org/wiki/Optical_character_recognition_>`_
+the full text index will contain the extracted text.
+
+To extract the value of the full text index for an Asset use the following call:
+
+.. code-block:: python
+
+    from pyPreservica import *
+
+    content = ContentAPI()
+
+    text: str = content.full_text("48c79abd-01f3-4b77-8132-546a76e0d337")
+
+The reference supplied must be a valid Asset reference.
+
+This allows you to copy the full text index into a description field to allow users to view the OCR text,
+for example:
+
+.. code-block:: python
+
+    from pyPreservica import *
+
+    content = ContentAPI()
+    entity = EntityAPI()
+
+    asset = entity.asset("48c79abd-01f3-4b77-8132-546a76e0d337")
+
+    asset.description = content.full_text(asset.reference)
+    entity.save(asset)
 
 Search
 ^^^^^^^^^
@@ -169,6 +202,16 @@ For example to create a report on the security tags of all assets within a folde
     client.search_index_filter_csv(query="%", csv_file="security.csv", filter_values=filters)
 
 
+Filter values can also be provided as a list of values to match on:
+
+.. code-block:: python
+
+    client = ContentAPI()
+
+    filters = {"xip.title": "%", "xip.description": "%", "xip.security_descriptor": ["open", "public"], "xip.parent_ref": "48c79abd-01f3-4b77-8132-546a76e0d337"}
+    client.search_index_filter_csv(query="%", csv_file="security.csv", filter_values=filters)
+
+
 Search Progress
 ^^^^^^^^^^^^^^^^^^^^^
 
@@ -234,11 +277,19 @@ To exclude filters in the search use:
 
 .. code-block:: python
 
-    fields = [Field(name='xip.title', value='Blockchain', operator="NOT",  sort_order=SortOrder.desc)]
+    fields = [Field(name='xip.title', value='Blockchain', operator=Operator.NOT,  sort_order=SortOrder.desc)]
 
     for hit in content.search_fields(query="%", fields=fields):
         print(hit)
 
+To use a list of possible values use:
+
+.. code-block:: python
+
+    term = Field(name='xip.security_descriptor', value=["open", "public"])
+
+    for hit in content.search_fields(query="%", fields=[term]):
+        print(hit)
 
 Reporting Examples
 ^^^^^^^^^^^^^^^^^^^^

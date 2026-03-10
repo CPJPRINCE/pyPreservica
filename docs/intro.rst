@@ -139,14 +139,14 @@ to be created to make the information accessible.
 
 **Bitstreams** represent the actual computer files as ingested into Preservica, i.e. the TIFF photograph or the PDF document.
 
-PIP Installation
+Installation
 ----------------
 
 pyPreservica is available from the Python Package Index (PyPI)
 
 https://pypi.org/project/pyPreservica/
 
-pyPreservica is built and tested against Python 3.8. Older versions of Python may not work.
+pyPreservica is built and tested against Python 3.10 onwards. Older versions of Python may not work.
 
 
 To install pyPreservica, simply run this simple command in your terminal of choice:
@@ -340,7 +340,12 @@ You can create a new credentials.properties file automatically using the ``save_
 
 4 **Shared Secrets**
 
-pyPreservica now supports authentication using shared secrets rather than a login account username and password.
+.. warning::
+    The shared secret authentication method is deprecated and may be removed in future releases. It should not be used for new projects.
+    See https://developers.preservica.com/blog/developer-blog-api-updates-in-preservica-8-4
+
+
+pyPreservica supports authentication using shared secrets rather than a login account username and password.
 This allows a trusted external applications such as pyPreservica to acquire a Preservica API authentication token
 without having to use a set of login credentials.
 

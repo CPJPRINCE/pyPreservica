@@ -10,7 +10,8 @@ licence:    Apache License 2.0
 """
 
 import csv
-from typing import Generator, Callable, Optional
+from io import BytesIO
+from typing import Generator, Callable, Optional, Union
 from pyPreservica.common import *
 
 logger = logging.getLogger(__name__)
@@ -19,18 +20,21 @@ class SortOrder(Enum):
     asc = 1
     desc = 2
 
+class Operator(Enum):
+    IS = "IS"
+    NOT = "NOT"
+
 class Field:
     name: str
-    value: Optional[str]
-    operator: Optional[str]
+    value: Optional[Union[str, list[str]]] = None
+    operator: Optional[Operator]
     sort_order: Optional[SortOrder]
 
-    def __init__(self, name: str, value: str, operator: Optional[str]=None, sort_order: Optional[SortOrder]=None):
+    def __init__(self, name: str, value: Union[str, list[str]], operator: Optional[Operator]=Operator.IS, sort_order: Optional[SortOrder]=None):
         self.name = name
         self.value = value
         self.operator = operator
         self.sort_order = sort_order
-
 
 
 class ContentAPI(AuthenticatedAPI):
@@ -69,6 +73,29 @@ class ContentAPI(AuthenticatedAPI):
 
         return self.security_tags_base(with_permissions=with_permissions)
 
+
+    def full_text(self, reference: str):
+        """
+        Return the full text index value for asset.
+        The reference must be for an Asset.
+
+        If the Asset has been OCR'd then this will return the OCR text
+
+        :param reference: The Asset reference
+        :return The value of the full text index or None if not found:
+        :rtype str:
+        """
+
+        hits = list(self.simple_search_list(query=f"id:{reference}",
+                                  list_indexes=['xip.reference', 'xip.full_text', 'xip.document_type']))
+        if len(hits) == 1:
+            hit = hits[0]
+            if (hit['xip.reference'] == reference) and (hit['xip.document_type'] == 'IO'):
+                return str(hit['xip.full_text'])
+
+        return None
+
+
     def object_details(self, entity_type, reference: str) -> dict:
         """
 
@@ -95,6 +122,29 @@ class ContentAPI(AuthenticatedAPI):
             logger.error(f"object_details failed with error code: {request.status_code}")
             raise RuntimeError(request.status_code, f"object_details failed with error code: {request.status_code}")
 
+
+    def download_bytes(self, reference):
+        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/octet-stream'}
+        params = {'id': f'sdb:IO|{reference}'}
+        with self.session.get(f'{self.protocol}://{self.server}/api/content/download', params=params, headers=headers,
+                              stream=True) as req:
+            if req.status_code == requests.codes.ok:
+                file_bytes = BytesIO()
+                for chunk in req.iter_content(chunk_size=CHUNK_SIZE):
+                    file_bytes.write(chunk)
+                file_bytes.seek(0)
+                return file_bytes
+            elif req.status_code == requests.codes.unauthorized:
+                self.token = self.__token__()
+                return self.download_bytes(reference)
+            elif req.status_code == requests.codes.not_found:
+                logger.error(f"The requested asset reference is not found in the repository: {reference}")
+                raise RuntimeError(reference, "The requested reference is not found in the repository")
+            else:
+                logger.error(f"download failed with error code: {req.status_code}")
+                raise RuntimeError(req.status_code, f"download failed with error code: {req.status_code}")
+
+
     def download(self, reference, filename):
         headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/octet-stream'}
         params = {'id': f'sdb:IO|{reference}'}
@@ -116,6 +166,27 @@ class ContentAPI(AuthenticatedAPI):
             else:
                 logger.error(f"download failed with error code: {req.status_code}")
                 raise RuntimeError(req.status_code, f"download failed with error code: {req.status_code}")
+
+    def thumbnail_bytes(self, entity_type, reference: str, size: Thumbnail = Thumbnail.LARGE) -> Union[BytesIO, None]:
+        headers = {HEADER_TOKEN: self.token, 'accept': 'image/png'}
+        params = {'id': f'sdb:{entity_type}|{reference}', 'size': f'{size.value}'}
+        with self.session.get(f'{self.protocol}://{self.server}/api/content/thumbnail', params=params, headers=headers, stream=True) as req:
+            if req.status_code == requests.codes.ok:
+                file_bytes = BytesIO()
+                for chunk in req.iter_content(chunk_size=CHUNK_SIZE):
+                    file_bytes.write(chunk)
+                file_bytes.seek(0)
+                return file_bytes
+            elif req.status_code == requests.codes.unauthorized:
+                self.token = self.__token__()
+                return self.thumbnail_bytes(entity_type, reference, size)
+            elif req.status_code == requests.codes.not_found:
+                logger.error(req.content.decode("utf-8"))
+                logger.error(f"The requested reference is not found in the repository: {reference}")
+                raise RuntimeError(reference, "The requested reference is not found in the repository")
+            else:
+                logger.error(f"thumbnail failed with error code: {req.status_code}")
+                raise RuntimeError(req.status_code, f"thumbnail failed with error code: {req.status_code}")
 
     def thumbnail(self, entity_type, reference, filename, size=Thumbnail.LARGE):
         headers = {HEADER_TOKEN: self.token, 'accept': 'image/png'}
@@ -273,10 +344,23 @@ class ContentAPI(AuthenticatedAPI):
             metadata_elements.append(field.name)
             if field.value is None or field.value == "":
                 field_list.append('{' f' "name": "{field.name}", "values": [] ' + '}')
-            elif field.operator == "NOT":
-                field_list.append('{' f' "name": "{field.name}", "values": ["{field.value}"], "operator": "NOT" ' + '}')
             else:
-                field_list.append('{' f' "name": "{field.name}", "values": ["{field.value}"] ' + '}')
+
+                if isinstance(field.value, str):
+                    if field.operator == Operator.NOT:
+                        field_list.append(
+                            '{' f' "name": "{field.name}", "values": ["{field.value}"], "operator": "NOT" ' + '}')
+                    else:
+                        field_list.append('{' f' "name": "{field.name}", "values":[ "{field.value}" ]' '}')
+                if isinstance(field.value, list):
+                    values = [f'"{w}"' for w in field.value]
+                    v:str = f' {",".join(values)} '
+                    if field.operator == Operator.NOT:
+                        field_list.append(
+                            '{' f' "name": "{field.name}", "values": [ {v} ], "operator": "NOT" ' + '}')
+                    else:
+                        field_list.append('{' f' "name": "{field.name}", "values":[ {v} ]' '}')
+
 
             if field.sort_order is not None:
                 sort_list.append(f'{{"sortFields": ["{field.name}"], "sortOrder": "{field.sort_order.name}"}}')
@@ -363,7 +447,12 @@ class ContentAPI(AuthenticatedAPI):
             if value == "":
                 field_list.append('{' f' "name": "{key}", "values": [] ' + '}')
             else:
-                field_list.append('{' f' "name": "{key}", "values": ["{value}"] ' + '}')
+                if isinstance(value, str):
+                    field_list.append('{' f' "name": "{key}", "values": ["{value}"] ' + '}')
+                if isinstance(value, list):
+                    values = [f'"{w}"' for w in value]
+                    v: str = f' {",".join(values)} '
+                    field_list.append('{' f' "name": "{key}", "values":[ {v} ]' '}')
 
         filter_terms = ','.join(field_list)
 
@@ -395,7 +484,12 @@ class ContentAPI(AuthenticatedAPI):
             if value == "":
                 field_list.append('{' f' "name": "{key}", "values": [] ' + '}')
             else:
-                field_list.append('{' f' "name": "{key}", "values": ["{value}"] ' + '}')
+                if isinstance(value, str):
+                    field_list.append('{' f' "name": "{key}", "values": ["{value}"] ' + '}')
+                if isinstance(value, list):
+                    values = [f'"{w}"' for w in value]
+                    v: str = f' {",".join(values)} '
+                    field_list.append('{' f' "name": "{key}", "values":[ {v} ]' '}')
 
         filter_terms = ','.join(field_list)
 

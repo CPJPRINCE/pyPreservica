@@ -87,8 +87,8 @@ class RetentionAPI(AuthenticatedAPI):
             assert ref == reference
             name = entity_response.find(f'.//{{{self.rm_ns}}}RetentionPolicy/{{{self.rm_ns}}}Name').text
             rp = RetentionPolicy(name, ref)
-            description = entity_response.find(f'.//{{{self.rm_ns}}}RetentionPolicy/{{{self.rm_ns}}}Description').text
-            rp.description = description
+            description = entity_response.find(f'.//{{{self.rm_ns}}}RetentionPolicy/{{{self.rm_ns}}}Description')
+            rp.description = description.text if description else ""
             security_tag = entity_response.find(f'.//{{{self.rm_ns}}}RetentionPolicy/{{{self.rm_ns}}}SecurityTag').text
             rp.security_tag = security_tag
             start_date_field = entity_response.find(
